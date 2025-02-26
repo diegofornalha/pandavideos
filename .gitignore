@@ -1,0 +1,21 @@
+# Arquivos sensíveis
+.env
+
+# Arquivos temporários
+*.DS_Store
+*.pyc
+__pycache__/
+*.log
+*.tmp
+*.swp
+*.swo
+*.mp4
+
+# Diretórios específicos
+.venv/
+downloads/
+!downloads/.gitkeep
+
+# Arquivos de teste
+test_progress.py
+test_progress_local.py
