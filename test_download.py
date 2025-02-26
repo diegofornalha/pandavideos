@@ -13,14 +13,16 @@ if not autenticado:
     print("Falha na autenticação")
     exit(1)
 
-# ID do vídeo a ser baixado (M2 Aula 1 - O universo do DEFI.mp4)
-video_id = "196653a7-39e6-425a-a5bd-53b1b8a0c2ae"
-pasta_destino = "downloads"
+# ID do vídeo a ser baixado
+video_id = "cd7ac4a0-c3a9-412d-8121-c5634dff3c11"
+pasta_destino = "downloads/DeFi"
 
 # Criar pasta de downloads se não existir
 if not os.path.exists(pasta_destino):
     os.makedirs(pasta_destino)
     print(f"Pasta '{pasta_destino}' criada.")
+else:
+    print(f"Pasta '{pasta_destino}' já existe.")
 
 # Obter informações do vídeo
 print(f"\nObtendo informações do vídeo {video_id}...")
