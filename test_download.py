@@ -128,6 +128,70 @@ def listar_videos_pasta(pasta_id, pasta_nome):
         print(f"❌ Erro ao listar vídeos da pasta: {e}")
         return []
 
+def download_with_progress(download_url, caminho_completo, nome_arquivo):
+    """
+    Faz download do arquivo a partir da URL com barra de progresso.
+    """
+    try:
+        # Obter tamanho do arquivo
+        head_response = requests.head(download_url, timeout=10)
+        total_size = int(head_response.headers.get('content-length', 0))
+                    print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
+                    
+        inicio = time.time()
+                    file_response = requests.get(download_url, stream=True, timeout=60)
+                    
+                    with open(caminho_completo, 'wb') as f, tqdm(
+                        desc=f"Baixando {nome_arquivo}",
+                        total=total_size,
+                        unit='B',
+                        unit_scale=True,
+                        unit_divisor=1024,
+                        bar_format='{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+                    ) as bar:
+                        for chunk in file_response.iter_content(chunk_size=8192):
+                            if chunk:
+                    tamanho_escrito = f.write(chunk)
+                    bar.update(tamanho_escrito)
+        tempo_total = time.time() - inicio
+        print(f"\n✅ Download concluído em {tempo_total:.2f} segundos")
+        if total_size > 0:
+            print(f"🚀 Velocidade média: {formatar_tamanho(total_size/tempo_total)}/s")
+        return True
+    except Exception as e:
+        print(f"❌ Erro durante o download: {e}")
+        return False
+
+def save_response_stream(response, caminho_completo, nome_arquivo):
+    """
+    Salva o stream de uma resposta que já contém os dados do arquivo.
+    """
+    try:
+        total_size = int(response.headers.get('content-length', 0))
+        print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
+            inicio = time.time()
+            
+            with open(caminho_completo, 'wb') as f, tqdm(
+                desc=f"Baixando {nome_arquivo}",
+                total=total_size,
+                unit='B',
+                unit_scale=True,
+                unit_divisor=1024,
+                bar_format='{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
+            ) as bar:
+            for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                    tamanho_escrito = f.write(chunk)
+                    bar.update(tamanho_escrito)
+            tempo_total = time.time() - inicio
+        print(f"\n✅ Download concluído em {tempo_total:.2f} segundos")
+            if total_size > 0:
+            print(f"🚀 Velocidade média: {formatar_tamanho(total_size/tempo_total)}/s")
+        return True
+    except Exception as e:
+        print(f"❌ Erro ao salvar o arquivo: {e}")
+        return False
+
 def baixar_video(video_id, pasta_destino):
     """Baixa um vídeo específico para a pasta de destino."""
     # Criar pasta de downloads se não existir
@@ -156,189 +220,65 @@ def baixar_video(video_id, pasta_destino):
         print(f"Título do vídeo: {titulo}")
         print(f"Nome do arquivo: {nome_arquivo}")
         print(f"Caminho completo: {caminho_completo}")
-    except Exception as e:
+except Exception as e:
         print(f"❌ Erro ao obter informações do vídeo: {e}")
         return False
 
     # Tentar download oficial primeiro
     print("\n=== MÉTODO 1: Download Oficial ===")
-    print(f"🔄 Iniciando download oficial...")
     download_endpoint = f'{DOWNLOAD_URL}/videos/{video_id}/download'
-
     try:
         print(f"Fazendo requisição para: {download_endpoint}")
         download_response = requests.post(download_endpoint, headers=headers, timeout=30, allow_redirects=False)
         print(f"Status da resposta: {download_response.status_code}")
         
-        # Verificar se é um redirecionamento
+        # Caso haja redirecionamento
         if download_response.status_code in [301, 302, 303, 307, 308]:
             download_url = download_response.headers.get('Location')
             print(f"Redirecionamento detectado para: {download_url}")
-            
             if download_url:
-                # Fazer o download do arquivo com barra de progresso
-                print(f"🔄 Iniciando download do arquivo via redirecionamento...")
-                inicio = time.time()
-                
-                # Obter informações sobre o tamanho do arquivo
-                try:
-                    file_head_response = requests.head(download_url)
-                    total_size = int(file_head_response.headers.get('content-length', 0))
-                    print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
-                except Exception as e:
-                    print(f"⚠️ Erro ao obter tamanho do arquivo: {e}")
-                    total_size = 0
-                
-                # Iniciar o download com stream para usar a barra de progresso
-                file_response = requests.get(download_url, stream=True, timeout=60)
-                
-                # Configurar a barra de progresso
-                with open(caminho_completo, 'wb') as f, tqdm(
-                    desc=f"Baixando {nome_arquivo}",
-                    total=total_size,
-                    unit='B',
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    bar_format='{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                ) as bar:
-                    bytes_baixados = 0
-                    for chunk in file_response.iter_content(chunk_size=8192):
-                        if chunk:
-                            size = f.write(chunk)
-                            bar.update(size)
-                            bytes_baixados += size
-                            
-                            # Mostrar estatísticas a cada 5MB
-                            if bytes_baixados % (5 * 1024 * 1024) < 8192:
-                                tempo_decorrido = time.time() - inicio
-                                velocidade = bytes_baixados / tempo_decorrido if tempo_decorrido > 0 else 0
-                                print(f"\n📊 Progresso: {formatar_tamanho(bytes_baixados)}/{formatar_tamanho(total_size)} "
-                                      f"({bytes_baixados/total_size*100:.1f}%) - "
-                                      f"Velocidade: {formatar_tamanho(velocidade)}/s")
-                
-                tempo_total = time.time() - inicio
-                print(f"\n✅ Download concluído em {tempo_total:.2f} segundos")
-                if total_size > 0:
-                    print(f"🚀 Velocidade média: {formatar_tamanho(total_size/tempo_total)}/s")
-                return True
+                return download_with_progress(download_url, caminho_completo, nome_arquivo)
             else:
                 print("❌ URL de redirecionamento não encontrada nos cabeçalhos.")
                 return False
+        
         elif download_response.status_code == 200:
-            # Verificar se a resposta é um JSON
             content_type = download_response.headers.get('Content-Type', '')
             print(f"Tipo de conteúdo: {content_type}")
             
             if 'application/json' in content_type:
-                # Tentar obter a URL de download da resposta JSON
+                # Se a resposta for JSON, extrair URL de download
                 try:
                     download_data = download_response.json()
                     print(f"Resposta JSON recebida: {json.dumps(download_data, indent=2)}")
-                    
-                    if 'url' in download_data:
-                        download_url = download_data['url']
+                    download_url = download_data.get('url')
+                    if download_url:
                         print(f"URL de download obtida: {download_url}")
-                        
-                        # Fazer o download do arquivo com barra de progresso
-                        print(f"🔄 Iniciando download do arquivo...")
-                        inicio = time.time()
-                        
-                        # Obter informações sobre o tamanho do arquivo
-                        file_head_response = requests.head(download_url)
-                        total_size = int(file_head_response.headers.get('content-length', 0))
-                        print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
-                        
-                        # Iniciar o download com stream para usar a barra de progresso
-                        file_response = requests.get(download_url, stream=True, timeout=60)
-                        
-                        # Configurar a barra de progresso
-                        with open(caminho_completo, 'wb') as f, tqdm(
-                            desc=f"Baixando {nome_arquivo}",
-                            total=total_size,
-                            unit='B',
-                            unit_scale=True,
-                            unit_divisor=1024,
-                            bar_format='{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                        ) as bar:
-                            bytes_baixados = 0
-                            for chunk in file_response.iter_content(chunk_size=8192):
-                                if chunk:
-                                    size = f.write(chunk)
-                                    bar.update(size)
-                                    bytes_baixados += size
-                                    
-                                    # Mostrar estatísticas a cada 5MB
-                                    if bytes_baixados % (5 * 1024 * 1024) < 8192:
-                                        tempo_decorrido = time.time() - inicio
-                                        velocidade = bytes_baixados / tempo_decorrido if tempo_decorrido > 0 else 0
-                                        print(f"\n📊 Progresso: {formatar_tamanho(bytes_baixados)}/{formatar_tamanho(total_size)} "
-                                              f"({bytes_baixados/total_size*100:.1f}%) - "
-                                              f"Velocidade: {formatar_tamanho(velocidade)}/s")
-                        
-                        tempo_total = time.time() - inicio
-                        print(f"\n✅ Download concluído em {tempo_total:.2f} segundos")
-                        print(f"🚀 Velocidade média: {formatar_tamanho(total_size/tempo_total)}/s")
-                        return True
+                        return download_with_progress(download_url, caminho_completo, nome_arquivo)
                     else:
                         print("❌ URL de download não encontrada na resposta JSON.")
-                        print(f"Resposta completa: {download_data}")
                         return False
                 except json.JSONDecodeError as e:
                     print(f"❌ Erro ao decodificar JSON da resposta: {e}")
-                    print(f"Conteúdo da resposta: {download_response.text[:500]}...")
                     return False
             else:
-                # A resposta pode ser o próprio arquivo
-                print("🔄 A resposta parece ser o próprio arquivo de vídeo. Salvando diretamente...")
-                inicio = time.time()
-                
-                total_size = int(download_response.headers.get('content-length', 0))
-                print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
-                
-                with open(caminho_completo, 'wb') as f, tqdm(
-                    desc=f"Baixando {nome_arquivo}",
-                    total=total_size,
-                    unit='B',
-                    unit_scale=True,
-                    unit_divisor=1024,
-                    bar_format='{desc}: {percentage:3.1f}%|{bar}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}, {rate_fmt}]'
-                ) as bar:
-                    bytes_baixados = 0
-                    for chunk in download_response.iter_content(chunk_size=8192):
-                        if chunk:
-                            size = f.write(chunk)
-                            bar.update(size)
-                            bytes_baixados += size
-                            
-                            # Mostrar estatísticas a cada 5MB
-                            if bytes_baixados % (5 * 1024 * 1024) < 8192:
-                                tempo_decorrido = time.time() - inicio
-                                velocidade = bytes_baixados / tempo_decorrido if tempo_decorrido > 0 else 0
-                                print(f"\n📊 Progresso: {formatar_tamanho(bytes_baixados)}/{formatar_tamanho(total_size)} "
-                                      f"({bytes_baixados/total_size*100:.1f}%) - "
-                                      f"Velocidade: {formatar_tamanho(velocidade)}/s")
-                
-                tempo_total = time.time() - inicio
-                print(f"\n✅ Download concluído em {tempo_total:.2f} segundos")
-                if total_size > 0:
-                    print(f"🚀 Velocidade média: {formatar_tamanho(total_size/tempo_total)}/s")
-                return True
+                # Se a resposta já contém o arquivo, salvar diretamente
+                print("🔄 A resposta contém os dados do arquivo. Salvando diretamente...")
+                return save_response_stream(download_response, caminho_completo, nome_arquivo)
         else:
             print(f"❌ Erro ao iniciar o download oficial: {download_response.status_code}")
             print(f"Resposta: {download_response.text[:500]}...")
             return False
     except Exception as e:
         print(f"❌ Exceção durante o download oficial: {e}")
-        return False
-
-    # Se o método oficial falhar, tentar o método alternativo
-    print("\n=== MÉTODO 2: Download Alternativo ===")
-    print("🔄 Tentando método alternativo de download...")
-    try:
-        return baixar_video_alternativo(video_id, pasta_destino)
-    except Exception as e:
-        print(f"❌ Exceção durante o download alternativo: {e}")
-        return False
+        # Se o método oficial falhar, tentar o método alternativo
+        print("\n=== MÉTODO 2: Download Alternativo ===")
+        print("🔄 Tentando método alternativo de download...")
+        try:
+            return baixar_video_alternativo(video_id, pasta_destino)
+        except Exception as e_alt:
+            print(f"❌ Exceção durante o download alternativo: {e_alt}")
+            return False
 
 def baixar_todos_videos(videos, pasta_destino):
     """Baixa todos os vídeos da lista fornecida, verificando quais já foram baixados."""
@@ -346,14 +286,11 @@ def baixar_todos_videos(videos, pasta_destino):
         print("⚠️ Nenhum vídeo disponível para download.")
         return
     
-    # Criar pasta de downloads se não existir
     if not os.path.exists(pasta_destino):
         os.makedirs(pasta_destino)
         print(f"📁 Pasta criada: {pasta_destino}")
     
     print(f"\n🔄 Iniciando verificação de {len(videos)} vídeos...")
-    
-    # Verificar quais vídeos já foram baixados
     videos_para_baixar = []
     for video in videos:
         titulo = video.get('title', f"video_{video['id']}")
@@ -365,33 +302,66 @@ def baixar_todos_videos(videos, pasta_destino):
         return
     
     print(f"\n🔄 Iniciando download de {len(videos_para_baixar)} vídeos pendentes...")
-    
     sucessos = 0
     falhas = 0
+    videos_com_falha = []
     
     for i, video in enumerate(videos_para_baixar, 1):
-        print(f"\n🔄 Baixando vídeo {i} de {len(videos_para_baixar)}: {video.get('title', 'Sem título')}")
+        titulo = video.get('title', 'Sem título')
+        print(f"\n🔄 Baixando vídeo {i} de {len(videos_para_baixar)}: {titulo}")
         if baixar_video(video['id'], pasta_destino):
             sucessos += 1
         else:
             falhas += 1
+            videos_com_falha.append(video)
     
-    print("\n=== RESULTADO FINAL ===")
+    # Tentar novamente os vídeos que falharam (até 3 tentativas)
+    if videos_com_falha:
+        print(f"\n⚠️ {len(videos_com_falha)} vídeos falharam no download. Tentando novamente...")
+        
+        for tentativa in range(2):  # 2 tentativas adicionais
+            if not videos_com_falha:
+                break
+                
+            print(f"\n🔄 Tentativa {tentativa + 2} para {len(videos_com_falha)} vídeos...")
+            videos_ainda_com_falha = []
+            
+            for i, video in enumerate(videos_com_falha, 1):
+                titulo = video.get('title', 'Sem título')
+                print(f"\n🔄 Tentativa {tentativa + 2} - Baixando vídeo {i} de {len(videos_com_falha)}: {titulo}")
+                
+                # Esperar um pouco antes de tentar novamente
+                time.sleep(3)
+                
+                if baixar_video(video['id'], pasta_destino):
+                    sucessos += 1
+                    falhas -= 1
+                else:
+                    videos_ainda_com_falha.append(video)
+            
+            videos_com_falha = videos_ainda_com_falha
+    
+print("\n=== RESULTADO FINAL ===")
     print(f"✅ Downloads concluídos: {sucessos}")
     if falhas > 0:
         print(f"❌ Downloads com falha: {falhas}")
+        for video in videos_com_falha:
+            print(f"  - {video.get('title', 'Sem título')} (ID: {video['id']})")
     
     # Verificar arquivos na pasta
     print(f"\n📁 Arquivos na pasta {pasta_destino}:")
-    arquivos = os.listdir(pasta_destino)
-    if not arquivos:
-        print("Nenhum arquivo encontrado na pasta de downloads.")
-    else:
-        print(f"Encontrados {len(arquivos)} arquivo(s):")
-        for arquivo in arquivos:
-            caminho_arquivo = os.path.join(pasta_destino, arquivo)
-            tamanho = os.path.getsize(caminho_arquivo)
-            print(f"- {arquivo} ({formatar_tamanho(tamanho)})")
+arquivos = os.listdir(pasta_destino)
+if not arquivos:
+    print("Nenhum arquivo encontrado na pasta de downloads.")
+else:
+    print(f"Encontrados {len(arquivos)} arquivo(s):")
+        tamanho_total = 0
+    for arquivo in arquivos:
+        caminho_arquivo = os.path.join(pasta_destino, arquivo)
+        tamanho = os.path.getsize(caminho_arquivo)
+            tamanho_total += tamanho
+        print(f"- {arquivo} ({formatar_tamanho(tamanho)})")
+        print(f"\nTamanho total: {formatar_tamanho(tamanho_total)}")
 
 def main():
     """Função principal com interface de linha de comando."""
@@ -489,7 +459,7 @@ def main():
             if videos:
                 # Baixar todos os vídeos
                 baixar_todos_videos(videos, pasta_destino)
-    else:
+else:
         # Se nenhum comando for especificado, mostrar ajuda
         parser.print_help()
 
