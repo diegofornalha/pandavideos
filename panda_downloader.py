@@ -93,7 +93,7 @@ def verificar_autenticacao() -> bool:
         print(f"Erro: {e}")
         return False
 
-def listar_pastas() -> List[Dict[str, Any]]:
+def listar_pastas(exibir: bool = True) -> List[Dict[str, Any]]:
     """Lista todas as pastas disponíveis na conta."""
     endpoint = f'{BASE_URL}/folders'
     try:
@@ -101,14 +101,16 @@ def listar_pastas() -> List[Dict[str, Any]]:
         response.raise_for_status()
         data = response.json()
         folders = data.get('folders', [])
-        if folders:
+        
+        if folders and exibir:
             print("\n=== Pastas Disponíveis ===")
             for i, pasta in enumerate(folders, 1):
                 nome = pasta.get('name', 'Sem nome')
                 pasta_id = pasta.get('id', 'Sem ID')
                 print(f"{i}. ID: {pasta_id} - Nome: {nome}")
-        else:
+        elif not folders and exibir:
             print("Nenhuma pasta encontrada na conta.")
+            
         return folders
     except requests.exceptions.RequestException as e:
         print(f"Erro ao listar pastas: {e}")
@@ -511,6 +513,91 @@ def main() -> None:
         baixar_todos_videos(videos)
     else:
         print("Opção inválida!")
+
+def identificar_subpastas(pasta_principal_id: str, padrao_nome: str = None) -> List[Dict[str, Any]]:
+    """
+    Identifica subpastas de uma pasta principal com base em padrões de nomenclatura.
+    
+    Args:
+        pasta_principal_id: ID da pasta principal
+        padrao_nome: Padrão regex para filtrar nomes de subpastas (opcional)
+        
+    Returns:
+        Lista de dicionários com informações das subpastas identificadas
+    """
+    print(f"🔍 Buscando subpastas para a pasta ID: {pasta_principal_id}")
+    
+    # Obter informações da pasta principal para referência
+    pasta_principal_info = obter_info_pasta(pasta_principal_id)
+    if not pasta_principal_info:
+        print("❌ Não foi possível obter informações da pasta principal")
+        return []
+    
+    nome_pasta_principal = pasta_principal_info.get('name', '')
+    print(f"📁 Pasta principal: {nome_pasta_principal}")
+    
+    # Buscar todas as pastas disponíveis
+    todas_pastas = listar_pastas(exibir=False)
+    
+    # Identificar potenciais subpastas com base nos padrões comuns
+    subpastas = []
+    
+    # Verificar se existe um padrão específico (ex: "Módulo X")
+    if padrao_nome:
+        padrao = re.compile(padrao_nome, re.IGNORECASE)
+    else:
+        # Padrão default para módulos numerados
+        padrao = re.compile(r'módulo\s+\d+', re.IGNORECASE)
+    
+    for pasta in todas_pastas:
+        nome_pasta = pasta.get('name', '')
+        
+        # Se o nome da pasta contém o padrão, considere como possível subpasta
+        if padrao.search(nome_pasta):
+            # Extrair número do módulo para ordenação
+            match = re.search(r'(\d+)', nome_pasta)
+            numero_modulo = int(match.group(1)) if match else 0
+            
+            subpastas.append({
+                'id': pasta.get('id'),
+                'name': nome_pasta,
+                'numero': numero_modulo
+            })
+    
+    # Ordenar subpastas pelo número do módulo
+    subpastas_ordenadas = sorted(subpastas, key=lambda x: x['numero'])
+    
+    if subpastas_ordenadas:
+        print(f"\n=== Subpastas encontradas para {nome_pasta_principal} ===")
+        for i, subpasta in enumerate(subpastas_ordenadas, 1):
+            print(f"{i}. {subpasta['name']} (ID: {subpasta['id']})")
+    else:
+        print(f"Nenhuma subpasta encontrada para {nome_pasta_principal}")
+    
+    return subpastas_ordenadas
+
+def obter_info_pasta(pasta_id: str) -> Dict[str, Any]:
+    """
+    Obtém informações detalhadas sobre uma pasta específica.
+    
+    Args:
+        pasta_id: ID da pasta
+        
+    Returns:
+        Dicionário com informações da pasta ou vazio se não encontrada
+    """
+    endpoint = f'{BASE_URL}/folders/{pasta_id}'
+    try:
+        response = requests.get(endpoint, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            print(f"Erro ao obter informações da pasta: {response.status_code}")
+            return {}
+    except requests.exceptions.RequestException as e:
+        print(f"Erro ao obter informações da pasta: {e}")
+        return {}
 
 if __name__ == "__main__":
     main() 

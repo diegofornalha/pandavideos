@@ -9,7 +9,8 @@ from panda_downloader import (
     listar_pastas,
     listar_videos_pasta,
     baixar_video,
-    baixar_todos_videos
+    baixar_todos_videos,
+    identificar_subpastas
 )
 
 def formatar_tamanho(tamanho_bytes):
@@ -128,6 +129,49 @@ def comando_baixar_todos_id(args):
         print(f"⚠️ Nenhum vídeo encontrado na pasta ID '{pasta_id}'")
         sys.exit(1)
 
+def comando_identificar_subpastas(args):
+    """Executa o comando para identificar subpastas de um curso/pasta principal."""
+    pasta_id = args.pasta_id
+    padrao = args.padrao if args.padrao else None
+    
+    print(f"🔍 Identificando subpastas para a pasta ID: {pasta_id}")
+    
+    # Identificar subpastas
+    subpastas = identificar_subpastas(pasta_id, padrao)
+    
+    if not subpastas:
+        print("⚠️ Nenhuma subpasta identificada para o padrão especificado.")
+        sys.exit(1)
+    
+    # Se o usuário solicitou download de todos os vídeos das subpastas
+    if args.baixar_todos:
+        pasta_destino_base = args.pasta_destino if args.pasta_destino else "downloads/curso"
+        
+        # Garantir que a pasta base existe
+        if not os.path.exists(pasta_destino_base):
+            os.makedirs(pasta_destino_base)
+        
+        print(f"\n📥 Iniciando download de vídeos de todas as subpastas para: {pasta_destino_base}")
+        
+        # Para cada subpasta, baixar seus vídeos
+        for subpasta in subpastas:
+            subpasta_id = subpasta['id']
+            subpasta_nome = subpasta['name']
+            
+            # Criar pasta específica para esta subpasta
+            pasta_destino = os.path.join(pasta_destino_base, subpasta_nome.replace(' ', '_'))
+            if not os.path.exists(pasta_destino):
+                os.makedirs(pasta_destino)
+            
+            print(f"\n📂 Processando subpasta: {subpasta_nome}")
+            videos = listar_videos_pasta(subpasta_id, subpasta_nome)
+            
+            if videos:
+                print(f"📥 Baixando {len(videos)} vídeos da subpasta '{subpasta_nome}' para '{pasta_destino}'")
+                baixar_todos_videos(videos, pasta_destino)
+            else:
+                print(f"⚠️ Nenhum vídeo encontrado na subpasta '{subpasta_nome}'")
+
 def main():
     """Função principal com interface de linha de comando."""
     parser = argparse.ArgumentParser(
@@ -140,6 +184,8 @@ Exemplos de uso:
   python panda_cli.py baixar abc123             # Baixa o vídeo com ID abc123
   python panda_cli.py todos "Nome da Pasta"     # Baixa todos os vídeos da pasta
   python panda_cli.py todos-id abc123           # Baixa todos os vídeos da pasta com ID abc123
+  python panda_cli.py subpastas abc123          # Identifica subpastas/módulos de um curso
+  python panda_cli.py subpastas abc123 --baixar # Baixa vídeos de todas as subpastas
 '''
     )
     
@@ -175,6 +221,16 @@ Exemplos de uso:
     todos_id_parser.add_argument('--pasta-destino', '-p', default=None, 
                              help='Pasta de destino (padrão: nome da pasta dentro de downloads)')
     todos_id_parser.set_defaults(func=comando_baixar_todos_id)
+    
+    # Comando para identificar subpastas
+    subpastas_parser = subparsers.add_parser('subpastas', help='Identificar subpastas/módulos de um curso')
+    subpastas_parser.add_argument('pasta_id', help='ID da pasta principal/curso')
+    subpastas_parser.add_argument('--padrao', '-p', help='Padrão regex para filtrar nomes de subpastas', default=None)
+    subpastas_parser.add_argument('--baixar', '-b', action='store_true', dest='baixar_todos', 
+                             help='Baixar vídeos de todas as subpastas identificadas')
+    subpastas_parser.add_argument('--pasta-destino', '-d', default=None, 
+                             help='Pasta base de destino para os downloads (padrão: downloads/curso)')
+    subpastas_parser.set_defaults(func=comando_identificar_subpastas)
     
     # Analisar argumentos
     args = parser.parse_args()
