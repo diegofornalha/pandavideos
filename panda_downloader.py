@@ -27,12 +27,31 @@ headers = {
     'Accept': 'application/json'
 }
 
+def formatar_tamanho(tamanho_bytes):
+    """Formata o tamanho em bytes para um formato legível."""
+    for unidade in ['B', 'KB', 'MB', 'GB']:
+        if tamanho_bytes < 1024.0:
+            return f"{tamanho_bytes:.2f} {unidade}"
+        tamanho_bytes /= 1024.0
+    return f"{tamanho_bytes:.2f} TB"
+
+def verificar_video_ja_baixado(titulo: str, pasta_destino: str) -> bool:
+    """Verifica se o vídeo já foi baixado anteriormente."""
+    nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
+    caminho_completo = os.path.join(pasta_destino, nome_arquivo)
+    
+    if os.path.exists(caminho_completo):
+        tamanho = os.path.getsize(caminho_completo)
+        print(f"⚠️ Vídeo '{titulo}' já existe ({formatar_tamanho(tamanho)})")
+        return True
+    return False
+
 def download_with_progress(download_url: str, output_path: str, description: str) -> bool:
     """Faz download de um arquivo com barra de progresso."""
     try:
         head_response = requests.head(download_url, timeout=10)
         total_size = int(head_response.headers.get('content-length', 0))
-        print(f"Tamanho total do arquivo: {total_size} bytes")
+        print(f"Tamanho total do arquivo: {formatar_tamanho(total_size)}")
         start_time = time.time()
         
         response = requests.get(download_url, stream=True, timeout=60)
@@ -51,7 +70,7 @@ def download_with_progress(download_url: str, output_path: str, description: str
         elapsed = time.time() - start_time
         print(f"\n✅ Download concluído em {elapsed:.2f} segundos")
         if total_size > 0:
-            print(f"🚀 Velocidade média: {total_size/elapsed:.2f} B/s")
+            print(f"🚀 Velocidade média: {formatar_tamanho(total_size/elapsed)}/s")
         return True
     except Exception as e:
         print(f"❌ Erro durante o download: {e}")
@@ -180,6 +199,10 @@ def baixar_video_oficial(video_id: str, pasta_destino: str = 'downloads') -> boo
         nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
         
+        # Verifica se o vídeo já foi baixado
+        if verificar_video_ja_baixado(titulo, pasta_destino):
+            return True
+        
         download_endpoint = f'{DOWNLOAD_URL}/videos/{video_id}/download'
         print(f"\nIniciando download oficial do vídeo: {titulo}")
         print(f"Fazendo requisição para: {download_endpoint}")
@@ -241,6 +264,10 @@ def baixar_video_alternativo(video_id: str, pasta_destino: str = 'downloads') ->
         titulo = video_info.get('title', f'video_{video_id}')
         nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
+        
+        # Verifica se o vídeo já foi baixado
+        if verificar_video_ja_baixado(titulo, pasta_destino):
+            return True
         
         if 'sources' in video_info and video_info['sources']:
             download_url = video_info['sources'][0].get('url')
@@ -363,15 +390,87 @@ def baixar_video(video_id: str, pasta_destino: str = 'downloads') -> bool:
     return baixar_video_oficial(video_id, pasta_destino)
 
 def baixar_todos_videos(videos: List[Dict[str, Any]], pasta_destino: str = 'downloads') -> None:
-    """Baixa todos os vídeos da lista fornecida."""
+    """Baixa todos os vídeos da lista fornecida, verificando quais já foram baixados."""
     if not videos:
-        print("Nenhum vídeo disponível para download.")
+        print("⚠️ Nenhum vídeo disponível para download.")
         return
-    print(f"\nIniciando download de {len(videos)} vídeos...")
-    for i, video in enumerate(videos, 1):
-        print(f"\nBaixando vídeo {i} de {len(videos)}")
-        baixar_video(video['id'], pasta_destino)
-    print("\nTodos os downloads foram concluídos!")
+    
+    if not os.path.exists(pasta_destino):
+        os.makedirs(pasta_destino)
+        print(f"📁 Pasta criada: {pasta_destino}")
+    
+    print(f"\n🔄 Iniciando verificação de {len(videos)} vídeos...")
+    videos_para_baixar = []
+    for video in videos:
+        titulo = video.get('title', f"video_{video['id']}")
+        if not verificar_video_ja_baixado(titulo, pasta_destino):
+            videos_para_baixar.append(video)
+    
+    if not videos_para_baixar:
+        print("✅ Todos os vídeos já foram baixados anteriormente!")
+        return
+    
+    print(f"\n🔄 Iniciando download de {len(videos_para_baixar)} vídeos pendentes...")
+    sucessos = 0
+    falhas = 0
+    videos_com_falha = []
+    
+    for i, video in enumerate(videos_para_baixar, 1):
+        titulo = video.get('title', 'Sem título')
+        print(f"\n🔄 Baixando vídeo {i} de {len(videos_para_baixar)}: {titulo}")
+        if baixar_video(video['id'], pasta_destino):
+            sucessos += 1
+        else:
+            falhas += 1
+            videos_com_falha.append(video)
+    
+    # Tentar novamente os vídeos que falharam (até 3 tentativas)
+    if videos_com_falha:
+        print(f"\n⚠️ {len(videos_com_falha)} vídeos falharam no download. Tentando novamente...")
+        
+        for tentativa in range(2):  # 2 tentativas adicionais (total 3)
+            if not videos_com_falha:
+                break
+                
+            print(f"\n🔄 Tentativa {tentativa + 2} para {len(videos_com_falha)} vídeos...")
+            videos_ainda_com_falha = []
+            
+            for i, video in enumerate(videos_com_falha, 1):
+                titulo = video.get('title', 'Sem título')
+                print(f"\n🔄 Tentativa {tentativa + 2} - Baixando vídeo {i} de {len(videos_com_falha)}: {titulo}")
+                
+                # Esperar um pouco antes de tentar novamente
+                time.sleep(3)
+                
+                if baixar_video(video['id'], pasta_destino):
+                    sucessos += 1
+                    falhas -= 1
+                else:
+                    videos_ainda_com_falha.append(video)
+            
+            videos_com_falha = videos_ainda_com_falha
+    
+    print("\n=== RESULTADO FINAL ===")
+    print(f"✅ Downloads concluídos: {sucessos}")
+    if falhas > 0:
+        print(f"❌ Downloads com falha: {falhas}")
+        for video in videos_com_falha:
+            print(f"  - {video.get('title', 'Sem título')} (ID: {video['id']})")
+    
+    # Verificar arquivos na pasta
+    print(f"\n📁 Arquivos na pasta {pasta_destino}:")
+    arquivos = os.listdir(pasta_destino)
+    if not arquivos:
+        print("Nenhum arquivo encontrado na pasta de downloads.")
+    else:
+        print(f"Encontrados {len(arquivos)} arquivo(s):")
+        tamanho_total = 0
+        for arquivo in arquivos:
+            caminho_arquivo = os.path.join(pasta_destino, arquivo)
+            tamanho = os.path.getsize(caminho_arquivo)
+            tamanho_total += tamanho
+            print(f"- {arquivo} ({formatar_tamanho(tamanho)})")
+        print(f"\nTamanho total: {formatar_tamanho(tamanho_total)}")
 
 def main() -> None:
     print("=== Downloader de Vídeos do Panda Videos ===")
