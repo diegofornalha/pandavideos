@@ -1,593 +1,495 @@
 import streamlit as st
 import os
-import requests
-import json
-import re
-import shutil
-import time
-import subprocess
-from tqdm import tqdm
-from dotenv import load_dotenv
 import pandas as pd
-import tempfile
-import base64
+import io
+import time
+from panda_downloader import (
+    verificar_autenticacao, 
+    listar_pastas,
+    listar_videos_pasta, 
+    baixar_video, 
+    baixar_todos_videos,
+    baixar_video_oficial,
+    identificar_subpastas,
+    headers,
+    BASE_URL,
+    API_KEY,
+    formatar_tamanho
+)
+from dotenv import load_dotenv
+import requests
 
-# Configuração da página Streamlit
+# Configurações da página
 st.set_page_config(
-    page_title="Panda Videos Downloader",
+    page_title="Panda Video Downloader",
     page_icon="🐼",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
-# Carregar variáveis de ambiente do arquivo .env
-load_dotenv()
+# Estilo personalizado
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        color: #FF4B4B;
+        text-align: center;
+    }
+    .sub-header {
+        font-size: 1.5rem;
+        margin-top: 0;
+        margin-bottom: 1rem;
+        text-align: center;
+    }
+    .success-message {
+        color: #00CC66;
+        font-weight: bold;
+    }
+    .error-message {
+        color: #FF4B4B;
+        font-weight: bold;
+    }
+    .info-box {
+        background-color: #F0F2F6;
+        padding: 1rem;
+        border-radius: 5px;
+    }
+</style>
+""", unsafe_allow_html=True)
 
-# Obter a chave API do ambiente
-API_KEY = os.getenv('PANDA_API_KEY')
-
-# URLs base da API do Panda Videos
-BASE_URL = 'https://api-v2.pandavideo.com.br'
-DOWNLOAD_URL = 'https://download-us01.pandavideo.com:7443'
-
-# Headers para as requisições
-headers = {
-    'Authorization': API_KEY,  # Sem o prefixo 'Bearer'
-    'Accept': 'application/json'
-}
-
-# Função para criar um link de download
-def get_download_link(file_path, link_text):
-    with open(file_path, 'rb') as f:
-        data = f.read()
-    b64 = base64.b64encode(data).decode()
-    href = f'<a href="data:application/octet-stream;base64,{b64}" download="{os.path.basename(file_path)}">{link_text}</a>'
-    return href
-
-# Função para verificar autenticação
-def verificar_autenticacao():
-    """Verifica se a autenticação com a API está funcionando corretamente."""
-    endpoint = f'{BASE_URL}/videos'
-    
-    try:
-        with st.spinner('Verificando autenticação...'):
+# Funções auxiliares adaptadas para Streamlit
+def verificar_autenticacao_st():
+    """Verificar autenticação com feedback no Streamlit"""
+    with st.spinner("Verificando autenticação com a API do Panda Videos..."):
+        if API_KEY is None:
+            st.error("🔑 API KEY não está definida! Configure o arquivo .env com sua PANDA_API_KEY")
+            return False
+        
+        endpoint = f'{BASE_URL}/videos'
+        try:
             response = requests.get(endpoint, headers=headers)
-            
             if response.status_code == 200:
-                st.success("✅ Autenticação bem-sucedida!")
+                st.success("✅ Autenticação realizada com sucesso!")
                 return True
             else:
-                st.error(f"❌ Falha na autenticação: {response.status_code}")
-                st.code(response.text)
+                st.error(f"❌ Falha na autenticação. Status: {response.status_code}")
+                st.error(f"Resposta: {response.text}")
                 return False
-                
-    except Exception as e:
-        st.error(f"❌ Erro de conexão: {e}")
-        return False
+        except Exception as e:
+            st.error(f"❌ Erro na autenticação: {e}")
+            return False
 
-# Função para listar pastas
-def listar_pastas():
-    """Lista todas as pastas disponíveis na conta."""
-    endpoint = f'{BASE_URL}/folders'
-    
-    try:
-        with st.spinner('Carregando pastas...'):
-            response = requests.get(endpoint, headers=headers)
-            response.raise_for_status()
-            
-            pastas = response.json()
-            
-            if 'folders' in pastas and pastas['folders']:
-                return pastas['folders']
-            else:
-                st.warning("Nenhuma pasta encontrada na conta.")
-                return []
-                
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao listar pastas: {e}")
-        return []
-
-# Função para listar vídeos de uma pasta
-def listar_videos_pasta(pasta_id, pasta_nome):
-    """Lista vídeos de uma pasta específica."""
-    endpoint = f'{BASE_URL}/folders/{pasta_id}'
-    
-    try:
-        with st.spinner(f'Carregando vídeos da pasta "{pasta_nome}"...'):
-            response = requests.get(endpoint, headers=headers)
-            
-            if response.status_code == 200:
-                pasta_info = response.json()
-                
-                if 'videos' in pasta_info and pasta_info['videos']:
-                    return pasta_info['videos']
-                else:
-                    st.info(f"Nenhum vídeo encontrado na pasta {pasta_nome}.")
-                    return obter_videos_da_pasta_alternativo(pasta_id, pasta_nome)
-            else:
-                st.warning(f"Erro ao acessar a pasta: {response.status_code}")
-                st.code(response.text)
-                
-                # Tentar método alternativo
-                st.info("Tentando método alternativo para listar vídeos...")
-                return obter_videos_da_pasta_alternativo(pasta_id, pasta_nome)
-                
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao listar vídeos da pasta: {e}")
-        return obter_videos_da_pasta_alternativo(pasta_id, pasta_nome)
-
-# Função para obter vídeos por método alternativo
-def obter_videos_da_pasta_alternativo(pasta_id, pasta_nome):
-    """Obtém vídeos da pasta específica por método alternativo."""
-    
-    # Método alternativo: obter todos os vídeos e filtrar pela pasta
-    try:
-        with st.spinner('Buscando vídeos por método alternativo...'):
-            # Obter todos os vídeos
-            all_videos_endpoint = f'{BASE_URL}/videos'
-            response = requests.get(all_videos_endpoint, headers=headers)
-            response.raise_for_status()
-            
-            all_videos = response.json()
-            
-            if 'videos' not in all_videos:
-                st.warning("Nenhum vídeo encontrado na conta.")
-                return []
-            
-            # Filtrar vídeos por pasta
-            videos_na_pasta = []
-            for video in all_videos['videos']:
-                if video.get('folder_id') == pasta_id:
-                    videos_na_pasta.append(video)
-            
-            if videos_na_pasta:
-                return videos_na_pasta
-            else:
-                st.warning(f"Nenhum vídeo encontrado na pasta {pasta_nome}.")
-                return []
-                
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao obter vídeos: {e}")
-        return []
-
-# Função para baixar vídeo oficial
-def baixar_video_oficial(video_id, pasta_destino='downloads'):
-    """Baixa um vídeo usando o endpoint oficial de download do Panda Videos."""
-    # Criar pasta de downloads se não existir
-    if not os.path.exists(pasta_destino):
-        os.makedirs(pasta_destino)
-    
-    # Primeiro, obter informações do vídeo para saber o título
-    info_endpoint = f'{BASE_URL}/videos/{video_id}'
-    try:
-        info_response = requests.get(info_endpoint, headers=headers)
-        info_response.raise_for_status()
-        
-        video_info = info_response.json()
-        titulo = video_info.get('title', f'video_{video_id}')
-        nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
-        caminho_completo = os.path.join(pasta_destino, nome_arquivo)
-        
-        # Usar o endpoint oficial de download
-        download_endpoint = f'{DOWNLOAD_URL}/videos/{video_id}/download'
-        
-        # Fazer a requisição POST para iniciar o download
-        download_response = requests.post(download_endpoint, headers=headers)
-        
-        if download_response.status_code == 200:
-            # Obter a URL de download da resposta
-            download_data = download_response.json()
-            if 'url' in download_data:
-                download_url = download_data['url']
-                
-                # Fazer o download do arquivo
-                progress_bar = st.progress(0)
-                status_text = st.empty()
-                
-                file_response = requests.get(download_url, stream=True)
-                total_size = int(file_response.headers.get('content-length', 0))
-                
-                with open(caminho_completo, 'wb') as f:
-                    downloaded = 0
-                    for chunk in file_response.iter_content(chunk_size=1024):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                            progress = int(100 * downloaded / total_size)
-                            progress_bar.progress(progress / 100)
-                            status_text.text(f"Baixando: {progress}% concluído")
-                
-                status_text.text("Download concluído!")
-                return caminho_completo
-            else:
-                st.warning("URL de download não encontrada na resposta.")
-                st.code(download_data)
-                return baixar_video_alternativo(video_id, pasta_destino)
-        else:
-            st.warning(f"Erro ao iniciar o download oficial: {download_response.status_code}")
-            st.code(download_response.text)
-            
-            # Se o download oficial falhar, tentar método alternativo
-            st.info("Tentando método alternativo de download...")
-            return baixar_video_alternativo(video_id, pasta_destino)
-    
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao baixar vídeo pelo método oficial: {e}")
-        st.info("Tentando método alternativo de download...")
-        return baixar_video_alternativo(video_id, pasta_destino)
-
-# Função para baixar vídeo por método alternativo
-def baixar_video_alternativo(video_id, pasta_destino='downloads'):
-    """Tenta baixar um vídeo usando métodos alternativos quando o oficial falha."""
-    # Criar pasta de downloads se não existir
-    if not os.path.exists(pasta_destino):
-        os.makedirs(pasta_destino)
+def baixar_video_st(video_id, pasta_destino="downloads", status_container=None):
+    """Versão adaptada para Streamlit do download de vídeo"""
+    if status_container is None:
+        status_container = st.empty()
     
     # Obter informações do vídeo
     endpoint = f'{BASE_URL}/videos/{video_id}'
-    
     try:
         response = requests.get(endpoint, headers=headers)
-        response.raise_for_status()
+        if response.status_code != 200:
+            status_container.error(f"❌ Erro ao obter informações do vídeo: {response.status_code}")
+            return False
         
         video_info = response.json()
-        
         titulo = video_info.get('title', f'video_{video_id}')
+        
+        # Criar diretório se não existir
+        if not os.path.exists(pasta_destino):
+            os.makedirs(pasta_destino)
+            status_container.info(f"📁 Pasta criada: {pasta_destino}")
+        
+        # Tentar baixar o vídeo
+        status_container.info(f"🔄 Iniciando download do vídeo: {titulo}")
+        resultado = baixar_video(video_id, pasta_destino)
+        
+        if resultado:
+            nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
+            caminho_completo = os.path.join(pasta_destino, nome_arquivo)
+            if os.path.exists(caminho_completo):
+                tamanho = os.path.getsize(caminho_completo)
+                status_container.success(f"✅ Download concluído: {nome_arquivo} ({formatar_tamanho(tamanho)})")
+            else:
+                status_container.success(f"✅ Download concluído, mas não foi possível encontrar o arquivo localmente.")
+            return True
+        else:
+            status_container.error(f"❌ Falha no download do vídeo {titulo}")
+            return False
+            
+    except Exception as e:
+        status_container.error(f"❌ Erro: {e}")
+        return False
+
+def baixar_todos_videos_st(videos, pasta_destino="downloads"):
+    """Versão adaptada para Streamlit do download de múltiplos vídeos"""
+    if not videos:
+        st.warning("⚠️ Nenhum vídeo disponível para download.")
+        return
+    
+    # Criar diretório se não existir
+    if not os.path.exists(pasta_destino):
+        os.makedirs(pasta_destino)
+        st.info(f"📁 Pasta criada: {pasta_destino}")
+    
+    # Verificar vídeos já baixados
+    st.info(f"🔍 Verificando {len(videos)} vídeos...")
+    videos_para_baixar = []
+    for video in videos:
+        titulo = video.get('title', f"video_{video['id']}")
         nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
         caminho_completo = os.path.join(pasta_destino, nome_arquivo)
         
-        # Verificar se é possível baixar diretamente
-        if 'sources' in video_info and video_info['sources']:
-            # Geralmente a primeira fonte é a de melhor qualidade
-            download_url = video_info['sources'][0]['url']
-            
-            st.info(f"Baixando via fontes diretas: {titulo}")
-            
-            # Fazer download do vídeo com barra de progresso
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            response = requests.get(download_url, stream=True)
-            total_size = int(response.headers.get('content-length', 0))
-            
-            with open(caminho_completo, 'wb') as f:
-                downloaded = 0
-                for chunk in response.iter_content(chunk_size=1024):
-                    if chunk:
-                        f.write(chunk)
-                        downloaded += len(chunk)
-                        progress = int(100 * downloaded / total_size)
-                        progress_bar.progress(progress / 100)
-                        status_text.text(f"Baixando: {progress}% concluído")
-            
-            status_text.text("Download concluído!")
-            return caminho_completo
+        if os.path.exists(caminho_completo):
+            tamanho = os.path.getsize(caminho_completo)
+            st.info(f"⚠️ Vídeo '{titulo}' já existe ({formatar_tamanho(tamanho)})")
         else:
-            st.warning(f"Não foi possível encontrar o link de download direto para o vídeo.")
-            
-            # Verificar se há um link de playback
-            if 'delivery_url' in video_info:
-                st.info(f"Tentando método m3u8...")
-                return baixar_video_m3u8(video_info['delivery_url'], titulo, pasta_destino)
-            else:
-                # Tentar obter o player URL
-                try:
-                    player_response = requests.get(f"{BASE_URL}/videos/{video_id}/player", headers=headers)
-                    if player_response.status_code == 200:
-                        player_info = player_response.json()
-                        if 'playerUrl' in player_info:
-                            return baixar_video_m3u8(player_info['playerUrl'], titulo, pasta_destino)
-                    st.error(f"Não foi possível encontrar um link de playback para o vídeo: {video_id}")
-                    return None
-                except Exception as e:
-                    st.error(f"Erro ao obter player URL: {e}")
-                    return None
+            videos_para_baixar.append(video)
     
-    except requests.exceptions.RequestException as e:
-        st.error(f"Erro ao baixar vídeo alternativo {video_id}: {e}")
-        return None
-
-# Função para baixar vídeo via m3u8
-def baixar_video_m3u8(url, titulo, pasta_destino='downloads'):
-    """Baixa vídeo a partir de um link m3u8."""
-    st.info(f"Iniciando download via m3u8 para: {titulo}")
-    
-    # URL pode ser do player - precisamos extrair o link do m3u8
-    try:
-        headers_web = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
-            'Accept': '*/*',
-            'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
-            'Referer': 'https://dashboard.pandavideo.com.br/',
-        }
-        
-        # Tentar obter o conteúdo da página ou do m3u8
-        response = requests.get(url, headers=headers_web)
-        content = response.text
-        
-        # Se é uma página HTML, procurar pelo link do m3u8
-        if '<html' in content.lower():
-            m3u8_urls = re.findall(r'https://[^"\']+\.m3u8', content)
-            if not m3u8_urls:
-                st.error("Não foi possível encontrar o link do m3u8 na página.")
-                return None
-            m3u8_url = m3u8_urls[0]
-        else:
-            # Se já é um m3u8, usar diretamente
-            m3u8_url = url
-        
-        # Obter o conteúdo do m3u8
-        response = requests.get(m3u8_url, headers=headers_web)
-        m3u8_content = response.text
-        
-        # Identificar as resoluções disponíveis
-        resolucoes = re.findall(r'RESOLUTION=(\d+x\d+)', m3u8_content)
-        if resolucoes:
-            # No Streamlit, vamos selecionar automaticamente a melhor resolução
-            resolucao_idx = 0  # Melhor qualidade (geralmente a primeira)
-            
-            # Extrair a URL do m3u8 específico da resolução
-            playlist_urls = re.findall(r'^[^#].+\.m3u8', m3u8_content, re.MULTILINE)
-            if not playlist_urls:
-                st.error("Não foi possível encontrar playlists específicas de resolução.")
-                return None
-                
-            resolucao_url = playlist_urls[resolucao_idx]
-            if not resolucao_url.startswith('http'):
-                # URL relativa - precisa construir a URL completa
-                base_url = m3u8_url.rsplit('/', 1)[0]
-                resolucao_url = f"{base_url}/{resolucao_url}"
-            
-            # Obter os segmentos de vídeo
-            response = requests.get(resolucao_url, headers=headers_web)
-            segmentos_content = response.text
-            
-            # Extrair os segmentos
-            segmentos = re.findall(r'^[^#].+\.ts', segmentos_content, re.MULTILINE)
-            if not segmentos:
-                st.error("Não foi possível encontrar segmentos de vídeo.")
-                return None
-            
-            # Criar diretório temporário
-            temp_dir = tempfile.mkdtemp()
-            
-            # Base URL para os segmentos
-            base_url = resolucao_url.rsplit('/', 1)[0]
-            
-            # Baixar todos os segmentos
-            st.text(f"Baixando {len(segmentos)} segmentos...")
-            progress_bar = st.progress(0)
-            
-            with open(os.path.join(temp_dir, 'lista.txt'), 'w') as lista_file:
-                for i, segmento in enumerate(segmentos):
-                    if not segmento.startswith('http'):
-                        segmento_url = f"{base_url}/{segmento}"
-                    else:
-                        segmento_url = segmento
-                    
-                    arquivo_segmento = os.path.join(temp_dir, f"segmento_{i:04d}.ts")
-                    
-                    # Baixar segmento
-                    response = requests.get(segmento_url, headers=headers_web)
-                    with open(arquivo_segmento, 'wb') as f:
-                        f.write(response.content)
-                    
-                    # Adicionar à lista para o ffmpeg
-                    lista_file.write(f"file '{arquivo_segmento}'\n")
-                    
-                    # Atualizar barra de progresso
-                    progress_bar.progress((i + 1) / len(segmentos))
-            
-            # Criar pasta de downloads se não existir
-            if not os.path.exists(pasta_destino):
-                os.makedirs(pasta_destino)
-            
-            # Nome do arquivo final
-            nome_arquivo = f"{titulo.replace(' ', '_')}.mp4"
-            caminho_completo = os.path.join(pasta_destino, nome_arquivo)
-            
-            # Unir os segmentos com ffmpeg
-            st.text("Unindo segmentos com ffmpeg...")
-            try:
-                # Verificar se ffmpeg está instalado
-                ffmpeg_cmd = ['ffmpeg', '-f', 'concat', '-safe', '0', 
-                             '-i', os.path.join(temp_dir, 'lista.txt'), 
-                             '-c', 'copy', caminho_completo]
-                
-                result = subprocess.run(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                
-                if result.returncode == 0:
-                    st.success(f"Download concluído: {caminho_completo}")
-                    # Limpar arquivos temporários
-                    shutil.rmtree(temp_dir)
-                    return caminho_completo
-                else:
-                    st.error("Erro ao unir os segmentos com ffmpeg.")
-                    st.code(result.stderr.decode())
-                    return None
-                    
-            except Exception as e:
-                st.error(f"Erro ao unir os segmentos: {e}")
-                st.warning("Verifique se o ffmpeg está instalado corretamente.")
-                return None
-        
-        else:
-            st.error("Não foi possível identificar as resoluções disponíveis.")
-            return None
-            
-    except Exception as e:
-        st.error(f"Erro no processo de download via m3u8: {e}")
-        return None
-
-# Função principal para baixar vídeo
-def baixar_video(video_id, pasta_destino='downloads'):
-    """Função principal para baixar vídeo - tenta o método oficial primeiro."""
-    return baixar_video_oficial(video_id, pasta_destino)
-
-# Interface principal do Streamlit
-def main():
-    st.title("🐼 Panda Videos Downloader")
-    st.markdown("---")
-    
-    # Sidebar para configurações
-    st.sidebar.title("Configurações")
-    
-    # Mostrar a chave API (parcialmente oculta)
-    if API_KEY:
-        api_key_masked = API_KEY[:5] + "..." + API_KEY[-5:] if len(API_KEY) > 10 else "***"
-        st.sidebar.success(f"API Key: {api_key_masked}")
-    else:
-        st.sidebar.error("API Key não encontrada!")
-        st.sidebar.info("Crie um arquivo .env com a variável PANDA_API_KEY")
+    if not videos_para_baixar:
+        st.success("✅ Todos os vídeos já foram baixados anteriormente!")
         return
     
-    # Pasta de destino para downloads
-    pasta_destino = st.sidebar.text_input("Pasta de destino", "downloads")
+    # Baixar vídeos pendentes
+    st.info(f"🔄 Iniciando download de {len(videos_para_baixar)} vídeos pendentes...")
     
-    # Opção para baixar todos os vídeos automaticamente
-    baixar_todos_automaticamente = st.sidebar.checkbox("Baixar todos os vídeos automaticamente", value=False)
+    # Barra de progresso geral
+    progresso_geral = st.progress(0)
+    status_atual = st.empty()
     
-    # Verificar autenticação automaticamente
-    if not verificar_autenticacao():
+    sucessos = 0
+    falhas = 0
+    videos_com_falha = []
+    
+    for i, video in enumerate(videos_para_baixar):
+        titulo = video.get('title', 'Sem título')
+        status_atual.info(f"🔄 Baixando vídeo {i+1} de {len(videos_para_baixar)}: {titulo}")
+        
+        # Container para status deste vídeo específico
+        status_container = st.empty()
+        
+        if baixar_video_st(video['id'], pasta_destino, status_container):
+            sucessos += 1
+        else:
+            falhas += 1
+            videos_com_falha.append(video)
+        
+        # Atualizar barra de progresso
+        progresso_geral.progress((i + 1) / len(videos_para_baixar))
+    
+    # Resultado final
+    st.markdown("## Resultado Final")
+    st.success(f"✅ Downloads concluídos: {sucessos}")
+    
+    if falhas > 0:
+        st.error(f"❌ Downloads com falha: {falhas}")
+        for video in videos_com_falha:
+            st.error(f"  - {video.get('title', 'Sem título')} (ID: {video['id']})")
+    
+    # Exibir arquivos na pasta
+    arquivos = os.listdir(pasta_destino)
+    if arquivos:
+        st.markdown(f"## 📁 Arquivos na pasta {pasta_destino}")
+        
+        dados_arquivos = []
+        tamanho_total = 0
+        
+        for arquivo in arquivos:
+            if arquivo.endswith('.mp4'):
+                caminho_arquivo = os.path.join(pasta_destino, arquivo)
+                tamanho = os.path.getsize(caminho_arquivo)
+                tamanho_total += tamanho
+                dados_arquivos.append({
+                    "Arquivo": arquivo,
+                    "Tamanho": formatar_tamanho(tamanho)
+                })
+        
+        # Exibir tabela de arquivos
+        if dados_arquivos:
+            st.table(pd.DataFrame(dados_arquivos))
+            st.info(f"Tamanho total: {formatar_tamanho(tamanho_total)}")
+        else:
+            st.info("Nenhum arquivo MP4 encontrado na pasta de downloads.")
+
+# Páginas da aplicação
+def pagina_inicio():
+    st.markdown('<h1 class="main-header">🐼 Panda Video Downloader</h1>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">Baixe vídeos da plataforma Panda Videos</p>', unsafe_allow_html=True)
+    
+    # Verificar autenticação
+    if not verificar_autenticacao_st():
         st.stop()
     
-    # Carregar pastas
-    pastas = listar_pastas()
+    st.markdown("## 📁 Opções Disponíveis")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.info("🔍 Listar Pastas")
+        st.button("Ver Pastas", on_click=lambda: st.session_state.update({"pagina": "listar_pastas"}))
+    
+    with col2:
+        st.info("📥 Baixar Video por ID")
+        st.button("Baixar Video", on_click=lambda: st.session_state.update({"pagina": "baixar_video"}))
+    
+    with col3:
+        st.info("🗂️ Gerenciar Subpastas")
+        st.button("Gerenciar Módulos", on_click=lambda: st.session_state.update({"pagina": "subpastas"}))
+    
+    # Informações adicionais
+    st.markdown("## 📋 Sobre o Aplicativo")
+    
+    with st.expander("Como usar"):
+        st.markdown("""
+        ### Instruções de Uso
+        
+        1. **Ver Pastas**: Lista todas as pastas disponíveis na sua conta e permite baixar vídeos de uma pasta específica.
+        2. **Baixar Video**: Permite baixar um vídeo específico através do seu ID.
+        3. **Gerenciar Módulos**: Identifica subpastas/módulos de um curso e permite baixar todos os vídeos de um curso completo.
+        
+        ### Pré-requisitos
+        
+        - Uma chave de API válida do Panda Videos configurada no arquivo `.env`
+        - Conexão com a internet
+        - Espaço em disco suficiente para os downloads
+        """)
+
+def pagina_listar_pastas():
+    st.markdown("# 📁 Pastas Disponíveis")
+    st.button("← Voltar", on_click=lambda: st.session_state.update({"pagina": "inicio"}))
+    
+    # Listar pastas
+    with st.spinner("Carregando pastas..."):
+        pastas = listar_pastas(exibir=False)
     
     if not pastas:
-        st.warning("Não foi possível listar as pastas. Verifique sua conexão e permissões.")
-        st.stop()
+        st.warning("Nenhuma pasta encontrada na conta.")
+        return
     
-    # Criar DataFrame para exibir as pastas
-    pastas_df = pd.DataFrame([
-        {"ID": pasta.get('id'), "Nome": pasta.get('name', 'Sem nome')}
-        for pasta in pastas
-    ])
+    # Exibir pastas como tabela
+    dados_pastas = []
+    for i, pasta in enumerate(pastas, 1):
+        dados_pastas.append({
+            "Número": i,
+            "Nome": pasta.get('name', 'Sem nome'),
+            "ID": pasta.get('id', 'Sem ID')
+        })
     
-    # Exibir pastas em uma tabela
-    st.subheader("📁 Pastas Disponíveis")
-    st.dataframe(pastas_df, use_container_width=True)
+    # Criar dataframe e exibir
+    df_pastas = pd.DataFrame(dados_pastas)
+    st.dataframe(df_pastas)
     
-    # Selecionar pasta
+    # Seleção de pasta
     pasta_selecionada = st.selectbox(
-        "Selecione uma pasta:",
+        "Selecione uma pasta para visualizar vídeos:", 
         options=range(len(pastas)),
-        format_func=lambda i: pastas[i].get('name', 'Sem nome')
+        format_func=lambda i: f"{pastas[i].get('name', 'Sem nome')} (ID: {pastas[i].get('id', 'Sem ID')})"
     )
     
-    pasta_id = pastas[pasta_selecionada].get('id')
-    pasta_nome = pastas[pasta_selecionada].get('name', 'Sem nome')
-    
-    if st.button(f"Listar Vídeos da Pasta: {pasta_nome}"):
-        # Listar vídeos da pasta selecionada
-        videos = listar_videos_pasta(pasta_id, pasta_nome)
+    if st.button("Listar Vídeos"):
+        pasta_id = pastas[pasta_selecionada].get('id')
+        pasta_nome = pastas[pasta_selecionada].get('name', 'Sem nome')
         
-        if not videos:
-            st.warning(f"Nenhum vídeo encontrado na pasta {pasta_nome}.")
-            st.stop()
+        st.session_state.pasta_atual = {
+            "id": pasta_id,
+            "nome": pasta_nome
+        }
         
-        # Salvar os vídeos na sessão para uso posterior
-        st.session_state.videos = videos
-        
-        # Criar DataFrame para exibir os vídeos
-        videos_df = pd.DataFrame([
-            {
-                "ID": video.get('id'),
-                "Título": video.get('title', 'Sem título'),
-                "Duração": video.get('duration', 'N/A'),
-                "Criado em": video.get('created_at', 'N/A')
-            }
-            for video in videos
-        ])
-        
-        # Exibir vídeos em uma tabela
-        st.subheader(f"🎬 Vídeos na Pasta: {pasta_nome}")
-        st.dataframe(videos_df, use_container_width=True)
-        
-        # Se a opção de baixar todos automaticamente estiver ativada
-        if baixar_todos_automaticamente:
-            st.session_state.download_all = True
-        # Caso contrário, mostrar as opções de download normais
-        else:
-            # Opções de download
-            st.subheader("⬇️ Opções de Download")
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("Baixar Todos os Vídeos"):
-                    st.session_state.download_all = True
-            
-            with col2:
-                video_indices = range(len(videos))
-                video_selecionado = st.selectbox(
-                    "Selecione um vídeo para baixar:",
-                    options=video_indices,
-                    format_func=lambda i: videos[i].get('title', f"Vídeo {i+1}")
-                )
-                
-                if st.button("Baixar Vídeo Selecionado"):
-                    st.session_state.download_single = video_selecionado
-    
-    # Processar downloads
-    if hasattr(st.session_state, 'videos'):
-        videos = st.session_state.videos
-        
-        # Download de todos os vídeos
-        if hasattr(st.session_state, 'download_all') and st.session_state.download_all:
-            st.subheader("📥 Baixando Todos os Vídeos")
-            
-            # Criar pasta de downloads
-            if not os.path.exists(pasta_destino):
-                os.makedirs(pasta_destino)
-            
-            # Baixar cada vídeo
-            arquivos_baixados = []
-            for i, video in enumerate(videos):
-                st.text(f"Baixando vídeo {i+1} de {len(videos)}: {video.get('title', 'Sem título')}")
-                
-                caminho_arquivo = baixar_video(video['id'], pasta_destino)
-                if caminho_arquivo:
-                    arquivos_baixados.append(caminho_arquivo)
-            
-            # Exibir resultados
-            if arquivos_baixados:
-                st.success(f"✅ {len(arquivos_baixados)} vídeos baixados com sucesso!")
-                
-                # Exibir links para os arquivos baixados
-                st.subheader("📋 Arquivos Baixados")
-                for arquivo in arquivos_baixados:
-                    st.markdown(get_download_link(arquivo, f"📥 {os.path.basename(arquivo)}"), unsafe_allow_html=True)
-            else:
-                st.error("❌ Nenhum vídeo foi baixado com sucesso.")
-            
-            # Limpar flag de download
-            st.session_state.download_all = False
-        
-        # Download de um único vídeo
-        if hasattr(st.session_state, 'download_single'):
-            video_idx = st.session_state.download_single
-            video = videos[video_idx]
-            
-            st.subheader(f"📥 Baixando: {video.get('title', 'Sem título')}")
-            
-            # Criar pasta de downloads
-            if not os.path.exists(pasta_destino):
-                os.makedirs(pasta_destino)
-            
-            # Baixar o vídeo
-            caminho_arquivo = baixar_video(video['id'], pasta_destino)
-            
-            # Exibir resultado
-            if caminho_arquivo:
-                st.success(f"✅ Vídeo baixado com sucesso!")
-                st.markdown(get_download_link(caminho_arquivo, f"📥 {os.path.basename(caminho_arquivo)}"), unsafe_allow_html=True)
-            else:
-                st.error("❌ Não foi possível baixar o vídeo.")
-            
-            # Limpar flag de download
-            del st.session_state.download_single
+        st.session_state.pagina = "listar_videos"
 
-# Executar a aplicação
+def pagina_listar_videos():
+    if "pasta_atual" not in st.session_state:
+        st.error("Nenhuma pasta selecionada. Voltando para a lista de pastas.")
+        st.button("Ir para Lista de Pastas", on_click=lambda: st.session_state.update({"pagina": "listar_pastas"}))
+        return
+    
+    pasta_id = st.session_state.pasta_atual["id"]
+    pasta_nome = st.session_state.pasta_atual["nome"]
+    
+    st.markdown(f"# 🎬 Vídeos da Pasta: {pasta_nome}")
+    st.button("← Voltar para Pastas", on_click=lambda: st.session_state.update({"pagina": "listar_pastas"}))
+    
+    # Listar vídeos
+    with st.spinner(f"Carregando vídeos da pasta {pasta_nome}..."):
+        videos = listar_videos_pasta(pasta_id, pasta_nome)
+    
+    if not videos:
+        st.warning(f"Nenhum vídeo encontrado na pasta '{pasta_nome}'")
+        return
+    
+    # Exibir vídeos como tabela
+    dados_videos = []
+    for i, video in enumerate(videos, 1):
+        dados_videos.append({
+            "Número": i,
+            "Título": video.get('title', 'Sem título'),
+            "Duração": video.get('duration', 'N/A'),
+            "ID": video.get('id', 'Sem ID')
+        })
+    
+    # Criar dataframe e exibir
+    df_videos = pd.DataFrame(dados_videos)
+    st.dataframe(df_videos)
+    
+    # Opções de download
+    st.markdown("## Opções de Download")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Baixar Um Vídeo")
+        video_selecionado = st.selectbox(
+            "Selecione um vídeo para baixar:", 
+            options=range(len(videos)),
+            format_func=lambda i: f"{videos[i].get('title', 'Sem título')} (Duração: {videos[i].get('duration', 'N/A')})"
+        )
+        
+        pasta_destino_individual = st.text_input("Pasta de destino (individual):", value="downloads")
+        
+        if st.button("Baixar Vídeo Selecionado"):
+            video_id = videos[video_selecionado].get('id')
+            if video_id:
+                baixar_video_st(video_id, pasta_destino_individual)
+            else:
+                st.error("ID do vídeo não encontrado.")
+    
+    with col2:
+        st.markdown("### Baixar Todos os Vídeos")
+        pasta_destino_todos = st.text_input(
+            "Pasta de destino (todos):", 
+            value=f"downloads/{pasta_nome.replace(' ', '_')}"
+        )
+        
+        if st.button("Baixar Todos os Vídeos"):
+            baixar_todos_videos_st(videos, pasta_destino_todos)
+
+def pagina_baixar_video():
+    st.markdown("# 📥 Baixar Vídeo por ID")
+    st.button("← Voltar", on_click=lambda: st.session_state.update({"pagina": "inicio"}))
+    
+    video_id = st.text_input("ID do Vídeo:", placeholder="Insira o ID do vídeo aqui")
+    pasta_destino = st.text_input("Pasta de destino:", value="downloads")
+    
+    if st.button("Baixar Vídeo", disabled=not video_id):
+        if not video_id.strip():
+            st.error("Por favor, insira um ID de vídeo válido.")
+        else:
+            baixar_video_st(video_id.strip(), pasta_destino)
+
+def pagina_subpastas():
+    st.markdown("# 🗂️ Subpastas / Módulos")
+    st.button("← Voltar", on_click=lambda: st.session_state.update({"pagina": "inicio"}))
+    
+    st.info("Esta funcionalidade permite identificar e baixar vídeos de módulos/subpastas de um curso completo.")
+    
+    # Listar pastas para seleção
+    with st.expander("Selecionar da lista de pastas"):
+        with st.spinner("Carregando pastas..."):
+            pastas = listar_pastas(exibir=False)
+        
+        if not pastas:
+            st.warning("Nenhuma pasta encontrada na conta.")
+        else:
+            pasta_selecionada = st.selectbox(
+                "Selecione a pasta principal/curso:", 
+                options=range(len(pastas)),
+                format_func=lambda i: f"{pastas[i].get('name', 'Sem nome')} (ID: {pastas[i].get('id', 'Sem ID')})"
+            )
+            
+            if st.button("Usar Esta Pasta"):
+                pasta_id = pastas[pasta_selecionada].get('id')
+                st.session_state.pasta_id_subpastas = pasta_id
+    
+    # Inserir ID manualmente
+    col1, col2 = st.columns(2)
+    with col1:
+        pasta_id_manual = st.text_input("Ou insira o ID da pasta principal/curso manualmente:")
+        if st.button("Usar Este ID", disabled=not pasta_id_manual):
+            st.session_state.pasta_id_subpastas = pasta_id_manual
+    
+    with col2:
+        padrao_regex = st.text_input("Padrão de regex para filtrar subpastas (opcional):", 
+                                   placeholder="Ex: Módulo.*")
+    
+    # Se foi selecionada uma pasta, mostrar opções para identificar subpastas
+    if "pasta_id_subpastas" in st.session_state:
+        pasta_id = st.session_state.pasta_id_subpastas
+        
+        st.markdown(f"## Identificando subpastas para ID: {pasta_id}")
+        
+        # Pasta de destino para downloads
+        pasta_destino_base = st.text_input("Pasta base para downloads:", value="downloads/curso")
+        
+        if st.button("Identificar Subpastas"):
+            with st.spinner("Identificando subpastas..."):
+                subpastas = identificar_subpastas(pasta_id, padrao_regex)
+            
+            if not subpastas:
+                st.warning("Nenhuma subpasta encontrada com o padrão especificado.")
+            else:
+                # Exibir subpastas encontradas
+                st.success(f"Encontradas {len(subpastas)} subpastas/módulos!")
+                
+                dados_subpastas = []
+                for i, subpasta in enumerate(subpastas, 1):
+                    dados_subpastas.append({
+                        "Número": i,
+                        "Nome": subpasta['name'],
+                        "ID": subpasta['id']
+                    })
+                
+                st.dataframe(pd.DataFrame(dados_subpastas))
+                
+                # Opção para baixar todos os vídeos das subpastas
+                if st.button("Baixar Vídeos de Todas as Subpastas"):
+                    # Garantir que a pasta base existe
+                    if not os.path.exists(pasta_destino_base):
+                        os.makedirs(pasta_destino_base)
+                        st.info(f"Pasta base criada: {pasta_destino_base}")
+                    
+                    st.info(f"Iniciando download de vídeos de todas as subpastas para: {pasta_destino_base}")
+                    
+                    # Barra de progresso para as subpastas
+                    progresso_subpastas = st.progress(0)
+                    
+                    for i, subpasta in enumerate(subpastas):
+                        subpasta_id = subpasta['id']
+                        subpasta_nome = subpasta['name']
+                        
+                        # Criar pasta específica para esta subpasta
+                        pasta_destino = os.path.join(pasta_destino_base, subpasta_nome.replace(' ', '_'))
+                        if not os.path.exists(pasta_destino):
+                            os.makedirs(pasta_destino)
+                        
+                        st.markdown(f"### Processando subpasta: {subpasta_nome}")
+                        videos = listar_videos_pasta(subpasta_id, subpasta_nome)
+                        
+                        if videos:
+                            st.info(f"Baixando {len(videos)} vídeos da subpasta '{subpasta_nome}' para '{pasta_destino}'")
+                            baixar_todos_videos_st(videos, pasta_destino)
+                        else:
+                            st.warning(f"Nenhum vídeo encontrado na subpasta '{subpasta_nome}'")
+                        
+                        # Atualizar progresso
+                        progresso_subpastas.progress((i + 1) / len(subpastas))
+
+# Principal
+def main():
+    # Inicializar estado da sessão
+    if "pagina" not in st.session_state:
+        st.session_state.pagina = "inicio"
+    
+    # Navegação entre páginas
+    if st.session_state.pagina == "inicio":
+        pagina_inicio()
+    elif st.session_state.pagina == "listar_pastas":
+        pagina_listar_pastas()
+    elif st.session_state.pagina == "listar_videos":
+        pagina_listar_videos()
+    elif st.session_state.pagina == "baixar_video":
+        pagina_baixar_video()
+    elif st.session_state.pagina == "subpastas":
+        pagina_subpastas()
+
 if __name__ == "__main__":
-    main() 
+    main()
