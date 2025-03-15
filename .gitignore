@@ -19,3 +19,4 @@ downloads/
 # Arquivos de teste
 test_progress.py
 test_progress_local.py
+/venv
